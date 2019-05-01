@@ -14,7 +14,7 @@ NOTMUCH_ARG=""
 # Mbsync
 MBSYNC_BIN="mbsync"
 MBSYNC_CFG="mbsync.conf"
-MBSYNC_ARG="-V"
+MBSYNC_ARG="--verbose"
 
 # Systemd
 SYSTEMD_BIN="systemctl"
@@ -38,6 +38,7 @@ PASS_FIELD="app-pass"
 # Data folders
 CONFIGS_DIR="${XDG_CONFIG_HOME}/${PROJECT}"
 MAILDB_DIR="$(${NOTMUCH_BIN} config get database.path)"
+LOGS_DIR="${XDG_HOME}/log/${PROJECT}"
 
 # Primary name/email
 USER_NAME="$(${NOTMUCH_BIN} config get user.name)"
@@ -143,6 +144,12 @@ function _mbsync_config () {
     local email="${1}"         ; shift
     local server="${1}"        ; shift
 
+    local mail_dir="${MAILDB_DIR}/${account}"
+    if [[ ${#} == 0 ]]; then # we are in discovery mode, need to use empty folder
+        mail_dir="${XDG_RUNTIME_DIR}/${THIS}/${account}"
+    fi
+    mkdir -p "${mail_dir}"
+
     local config="${CONFIGS_DIR}/${account}/${MBSYNC_CFG}"
 
     cat > "${config}" << EOF
@@ -167,34 +174,44 @@ IMAPStore ${account}-remote
 
 MaildirStore ${account}-local
     Subfolders Verbatim
-    Path ${cache_dir}/
-    Inbox ${cache_dir}/Inbox
+    Path ${mail_dir}/
+    Inbox ${mail_dir}/inbox
 
 Channel Other
     Master :${account}-remote:
     Slave :${account}-local:
 EOF
-    if (( "${#}" == 0 )); then
+    if [[ ${#} == 0 ]]; then
         cat >> "${config}" << EOF
     Patterns *
 EOF
         return
     fi
 
+    # Cleanup after discovery mode
+    ${RM_DIR} "${XDG_RUNTIME_DIR}/${THIS}/${account}"
+
     # If imap folders are passed we are able to generate full config
     local imap_folders=("${@}")
 
+    local trimmed_folders=()
+    local folder=""
+    for folder in "${imap_folders[@]}"; do
+        trimmed_folders+=("$(trim "${folder}")")
+    done
+    unset folder
+
     cat >> "${config}" << EOF
-    Patterns * $(printf " !\"%s\"" "${imap_folders[@]}")
+    Patterns * $(printf " !\"%s\"" "${imap_folders[@]}")$(printf " !\"%s\"" "${trimmed_folders[@]}")
 EOF
 
-    local folder
-    for folder in "${imap_folders[@]}"; do
+    local i
+    for (( i=0; i<${#trimmed_folders[@]}; i++ )); do
         cat >> "${config}" << EOF
 
-Channel $(trim "${folder}")
-    Master :${account}-remote:"${folder}"
-    Slave :${account}-local:"$(trim "${folder}")"
+Channel ${account}-${trimmed_folders[${i}]}
+    Master :${account}-remote:"${imap_folders[${i}]}"
+    Slave :${account}-local:"${trimmed_folders[${i}]}"
 EOF
     done
 
@@ -204,9 +221,9 @@ Group ${account}
     Channel Other
 EOF
 
-    for folder in "${imap_folders[@]}"; do
+    for (( i=0; i<${#trimmed_folders[@]}; i++ )); do
         cat >> "${config}" << EOF
-    Channel $(trim "${folder}")
+    Channel ${account}-${trimmed_folders[${i}]}
 EOF
     done
 }
@@ -275,7 +292,7 @@ EOF
 }
 
 function index () {
-    ${NOTMUCH_BIN} new "${NOTMUCH_ARG}"
+    ${NOTMUCH_BIN} new "${NOTMUCH_ARG}" 2>&1 | tee "${LOGS_DIR}/${NOTMUCH_CFG%.conf}.log"
 }
 
 function sync_help () {
@@ -294,11 +311,12 @@ function sync () {
     local channel="--all" # man mbsync
 
     if [[ ${#} == 0 ]]; then
-        accounts=("$(list)")
+        accounts=($(list))
     elif [[ ${#} == 1 ]]; then
         accounts+=("${1}"); shift
     else
         channel="${*:+$(trim "${*}")}" # normalize channel name
+        channel="${account}-${channel}"
     fi
 
     local account=""
@@ -308,7 +326,7 @@ function sync () {
             continue
         fi
         local config="${CONFIGS_DIR}/${account}/${MBSYNC_CFG}"
-        ${MBSYNC_BIN} "${MBSYNC_ARG}" --config "${config}" "${channel}"
+        ${MBSYNC_BIN} --config "${config}" ${MBSYNC_ARG} "${channel}" 2>&1 | tee "${LOGS_DIR}/${account}/${MBSYNC_CFG%.conf}.log"
     done
 }
 
@@ -334,10 +352,10 @@ function trim () {
 
 function remove_help () {
     cat << EOF
-remove [--keep-mail] 'account'
+remove [--purge-mail] 'account'
 
 Remove 'account' settings.
-    --keep-mail - do not remove account's maildir.
+    --pugge-mail - remove account's maildir.
 
 EOF
 }
@@ -345,14 +363,14 @@ EOF
 function remove () {
     [[ ${#} > 2 ]] && error ${USAGE} "too many arguments" && return 1
 
-    local keepmail
+    local purge_mail
 
     local arg
     local args=()
     for arg in "${@}"; do
         case "${arg}" in
-            --keep-mail)
-                keepmail="true"
+            --purge-mail)
+                purge_mail="true"
                 ;;
             -*)
                 error ${USAGE} "unknown argument '${arg}'"
@@ -374,8 +392,9 @@ function remove () {
         return 1
     fi
 
-    [[ ! "${keepmail}" ]] && ${RM_DIR} "${MAILDB_DIR}/${account}"
+    [[ "${purge_mail}" ]] && ${RM_DIR} "${MAILDB_DIR}/${account}"
     ${RM_DIR} "${CONFIGS_DIR}/${account}"
+    ${RM_DIR} "${LOGS_DIR}/${account}"
     disable "${account}"
     _pass_remove "${account}"
 }
@@ -445,8 +464,8 @@ function setup () {
     local config_dir="${CONFIGS_DIR}/${account}"
     mkdir -p "${config_dir}"
 
-    local cache_dir="${MAILDB_DIR}/${account}"
-    mkdir -p "${cache_dir}"
+    local log_dir="${LOGS_DIR}/${account}"
+    mkdir -p "${log_dir}"
 
     _pass_insert "${account}" "${pass_name}"
 
@@ -454,7 +473,7 @@ function setup () {
     _mbsync_config "${account}" "${full_name}" "${email}" "${server}"
 
     local imap_folders=()
-    readarray -t imap_folders < <(mbsync --config "${config_dir}/${MBSYNC_CFG}" -al)
+    readarray -t imap_folders < <(${MBSYNC_BIN} --config "${config_dir}/${MBSYNC_CFG}" --list --all)
     if [[ ${#imap_folders[@]} == 0 ]]; then
         remove "${account}"
         error "invalid IMAP credentials"
@@ -466,7 +485,7 @@ function setup () {
     _notmuch_config "${account}" "${full_name}" "${email}"
 
     sync "${account}"
-    index "${account}"
+    #index "${account}"
     [[ "${enable_poll}" ]] && enable "${account}"
 }
 
