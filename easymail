@@ -1,0 +1,630 @@
+#!/usr/bin/env bash
+
+#===============================================================================
+# Config part
+#===============================================================================
+#
+PROJECT="easymail"
+
+# Notmuch
+NOTMUCH_BIN="notmuch"
+NOTMUCH_CFG="notmuch.conf"
+NOTMUCH_ARG=""
+
+# Mbsync
+MBSYNC_BIN="mbsync"
+MBSYNC_CFG="mbsync.conf"
+MBSYNC_ARG="-V"
+
+# Systemd
+SYSTEMD_BIN="systemctl"
+SYSTEMD_UNIT="${PROJECT}"
+SYSTEMD_START="--user enable --now"
+SYSTEMD_STOP="--user disable --now"
+
+# IMAP notify
+NOTIFY_BIN="goimapnotify"
+NOTIFY_CFG="notify.conf"
+
+# ZX2C4 Pass
+PASS_BIN="pass"
+PASS_DIR="${PASSWORD_STORE_DIR:-${HOME}/.password-store}"
+PASS_GRP=".${PROJECT}"
+PASS_FIELD="app-pass"
+
+## Check dependencies
+#which ${NOTMUCH_BIN} ${MBSYNC_BIN} ${NOTIFY_BIN} ${PASS_BIN} || exit 1
+
+# Data folders
+CONFIGS_DIR="${XDG_CONFIG_HOME}/${PROJECT}"
+MAILDB_DIR="$(${NOTMUCH_BIN} config get database.path)"
+
+# Primary name/email
+USER_NAME="$(${NOTMUCH_BIN} config get user.name)"
+USER_EMAIL="$(${NOTMUCH_BIN} config get user.primary_email)"
+
+# Debug
+#PRETEND="echo"
+RM_DIR="${PRETEND} rm -frv"
+RM="${PRETEND} rm -fv"
+
+#===============================================================================
+# Code part
+#===============================================================================
+#
+# This script
+THIS="$(basename ${0})"
+
+# Override default with settings
+[[ -r "${XDG_CONFIG_HOME}/${THIS}.conf" ]] && source "${XDF_CONFIG_HOME}/${THIS}.conf"
+
+# Usage message and indicator
+USAGE="usage:"
+
+# Default shell options
+shopt -s nullglob
+
+#===============================================================================
+# Internal helpers
+#===============================================================================
+#
+function _error () {
+    local usage="${1}"; [[ "${usage}" == "${USAGE}" ]] && shift || unset usage
+    local caller="${FUNCNAME[2]}"
+
+    echo "[${THIS}:${caller}] error: ${@}" >/dev/stderr
+
+    if [[ -n "${usage}" ]]; then
+        if [[ $(type -t "${caller}_help") == "function" ]]; then
+            echo -n "${USAGE} ${THIS} " && ${caller}_help
+        fi
+    fi
+}
+
+function _pass_list () {
+    local accounts=()
+
+    local i
+    for i in "${PASS_DIR}/${PASS_GRP:+${PASS_GRP}/}"*.gpg ; do
+        local account="${i##*/}"
+        accounts+=("${account%.gpg}")
+    done
+
+    echo "${accounts[@]}"
+}
+
+function _pass_remove () {
+    local account="${1}"
+    local pass="${PASS_DIR}/${PASS_GRP:+${PASS_GRP}/}${account}.gpg"
+
+    if [[ ! -L "${pass}" ]]; then
+        error "no pass configured for accoutn '${1}'"
+        return 1
+    fi
+
+    ${RM} "${pass}"
+}
+
+function _pass_insert () {
+    local account="${1}"
+    local pass_src="${2}.gpg"
+
+    local pass_dst_dir="${PASS_DIR}${PASS_GRP:+/${PASS_GRP}}"
+    local pass_dst="${pass_dst_dir}/${account}.gpg"
+
+    if [[ ! -r "${PASS_DIR}/${pass_src}" ]]; then
+       error "pass file '${pass_src}' does not exists"
+       return 1
+    fi
+
+    mkdir -p "${pass_dst_dir}"
+    ln -sf "../${pass_src}" "${pass_dst}"
+}
+
+function _pass_get () {
+    local account="${1}"
+    local value=$(${PASS_BIN} "${PASS_GRP:+${PASS_GRP}/}${account}" 2>/dev/null | grep "^${PASS_FIELD}: " | awk '{print $NF}')
+
+    if [[ -z "${value}" ]]; then
+        error "can't get password for '${account}'"
+        return 1
+    fi
+
+    echo "${value}"
+}
+
+function account_exists () {
+    [[ -L "${PASS_DIR}/${PASS_GRP:+${PASS_GRP}/}/${1}.gpg" ]]
+}
+
+function _mbsync_config () {
+    local account="${1}"       ; shift
+    local full_name="${1}"     ; shift
+    local email="${1}"         ; shift
+    local server="${1}"        ; shift
+
+    local config="${CONFIGS_DIR}/${account}/${MBSYNC_CFG}"
+
+    cat > "${config}" << EOF
+#################################################################################
+### Mbsync config.
+### Account: '${account}', user info: '${full_name}<${email}>'
+#################################################################################
+CopyArrivalDate yes
+Create Both
+Expunge Both
+SyncState *
+
+IMAPAccount ${account}
+    Host ${server}
+    User ${email}
+    PassCmd "${THIS} get ${account} pass"
+    SSLType IMAPS
+    CertificateFile /etc/ssl/certs/ca-certificates.crt
+
+IMAPStore ${account}-remote
+    Account ${account}
+
+MaildirStore ${account}-local
+    Subfolders Verbatim
+    Path ${cache_dir}/
+    Inbox ${cache_dir}/Inbox
+
+Channel Other
+    Master :${account}-remote:
+    Slave :${account}-local:
+EOF
+    if (( "${#}" == 0 )); then
+        cat >> "${config}" << EOF
+    Patterns *
+EOF
+        return
+    fi
+
+    # If imap folders are passed we are able to generate full config
+    local imap_folders=("${@}")
+
+    cat >> "${config}" << EOF
+    Patterns * $(printf " !\"%s\"" "${imap_folders[@]}")
+EOF
+
+    local folder
+    for folder in "${imap_folders[@]}"; do
+        cat >> "${config}" << EOF
+
+Channel $(trim "${folder}")
+    Master :${account}-remote:"${folder}"
+    Slave :${account}-local:"$(trim "${folder}")"
+EOF
+    done
+
+    cat >> "${config}" << EOF
+
+Group ${account}
+    Channel Other
+EOF
+
+    for folder in "${imap_folders[@]}"; do
+        cat >> "${config}" << EOF
+    Channel $(trim "${folder}")
+EOF
+    done
+}
+
+function _notmuch_config () {
+    local account="${1}"
+    local full_name="${2}"
+    local email="${3}"
+
+    cat > "${CONFIGS_DIR}/${account}/${NOTMUCH_CFG}" << EOF
+#
+# Account: '${account}', user info: '${full_name}<${email}>'
+#
+[user]
+name=${full_name}
+primary_email=${email}
+EOF
+}
+
+function _notify_config () {
+    local account="${1}"  ; shift
+    local email="${1}"    ; shift
+    local server="${1}"   ; shift
+    local port="${1}"     ; shift
+    local imap_folders=("${@}")
+
+    local pass_cmd="${THIS} get ${account} pass"
+    local sync_cmd="${THIS} sync ${account} '%s'"
+    local index_cmd="${THIS} index ${account}"
+
+    cat > "${CONFIGS_DIR}/${account}/${NOTIFY_CFG}" << EOF
+{
+  "host"         : "${server}",
+  "port"         : ${port},
+  "tls"          : true,
+  "tlsOptions"   : { "rejectUnauthorized": true },
+  "username"     : "${email}",
+  "passwordCmd"  : "${pass_cmd}",
+  "onNewMail"    : "${sync_cmd}",
+  "onNewMailPost": "${index_cmd}",
+  "boxes"        : [ $(printf " \"%s\"," "${imap_folders[@]}" | sed s'/.$//') ]
+}
+EOF
+}
+
+function error () {
+    _error "${@}"
+}
+
+function error_exit () {
+    _error "${@}"
+    exit 1
+}
+
+#===============================================================================
+# Commands
+#===============================================================================
+#
+function index_help () {
+    cat << EOF
+index ['account']
+
+Update Notmuch tags database.
+
+EOF
+}
+
+function index () {
+    ${NOTMUCH_BIN} new "${NOTMUCH_ARG}"
+}
+
+function sync_help () {
+    cat << EOF
+sync ['account' ['channel']]
+
+Syncronize 'account' with IMAP server.
+If 'channel' specified then syncronize only it.
+If not 'account' specified - sync all accounts.
+
+EOF
+}
+
+function sync () {
+    local accounts=()
+    local channel="--all" # man mbsync
+
+    if [[ ${#} == 0 ]]; then
+        accounts=("$(list)")
+    elif [[ ${#} == 1 ]]; then
+        accounts+=("${1}"); shift
+    else
+        channel="${*:+$(trim "${*}")}" # normalize channel name
+    fi
+
+    local account=""
+    for account in "${accounts[@]}"; do
+        if ! account_exists "${account}" ; then
+            error "account not exists '${account}', skipping..."
+            continue
+        fi
+        local config="${CONFIGS_DIR}/${account}/${MBSYNC_CFG}"
+        ${MBSYNC_BIN} "${MBSYNC_ARG}" --config "${config}" "${channel}"
+    done
+}
+
+function trim () {
+    local value="${*}"
+
+    # Remove IMAP prefix
+    value="${value##*/}"
+
+    # Lowercase
+    value="${value,,}"
+
+    if [[ "${value}" == "sent"* ]]; then
+        # trim 'sent mail' -> 'sent' to unify accounts.
+        value="${value%% *}"
+    else
+        # replace spaces with underscores
+        value="${value// /_}"
+    fi
+
+    echo "${value}"
+}
+
+function remove_help () {
+    cat << EOF
+remove [--keep-mail] 'account'
+
+Remove 'account' settings.
+    --keep-mail - do not remove account's maildir.
+
+EOF
+}
+
+function remove () {
+    [[ ${#} > 2 ]] && error ${USAGE} "too many arguments" && return 1
+
+    local keepmail
+
+    local arg
+    local args=()
+    for arg in "${@}"; do
+        case "${arg}" in
+            --keep-mail)
+                keepmail="true"
+                ;;
+            -*)
+                error ${USAGE} "unknown argument '${arg}'"
+                return 1
+                ;;
+            *)
+                args+=("${arg}")
+                ;;
+        esac
+    done
+    set -- "${args[@]}"
+
+    [[ ! ${#} == 1 ]] && error ${USAGE} "account not specified"
+
+    local account="${1}"
+
+    if ! account_exists "${account}" ; then
+        error "account '${account}' does not exists"
+        return 1
+    fi
+
+    [[ ! "${keepmail}" ]] && ${RM_DIR} "${MAILDB_DIR}/${account}"
+    ${RM_DIR} "${CONFIGS_DIR}/${account}"
+    disable "${account}"
+    _pass_remove "${account}"
+}
+
+function setup_help () {
+    cat << EOF
+setup [--enable] [--full-name=name] [--port=port] [--server=server] 'account' 'email' 'pass'
+
+Setup and optionally enable 'account' for 'email' with 'pass' password.
+    --enable     - start new email polling just after setup,
+    --full-name= - use non-default full user name,
+    --port=      - use non standard IMAP port (default: 993),
+    --server=    - use custom IMAP server.
+
+Server name will be extracted from email address, newly created account will be disabled
+after setup, full user name will be taken from global 'notmuch' configuration.
+
+'pass' file should contain '${PASS_FIELD}' field.
+
+Use: ${THIS} enable 'account' to start new mail polling or specify '--enable' above.
+
+EOF
+}
+
+function setup () {
+    local enable_poll=""
+    local full_name="${USER_NAME}"
+    local port="993"
+    local server=""
+
+    # Parse switches
+    local arg
+    local args=()
+    for arg in "${@}"; do
+        case "${arg}" in
+            --enable)
+                enable_poll="true"
+                ;;
+            --full-name*)
+                full_name="${arg##*=}"
+                ;;
+            --port*)
+                port="${arg##*=}"
+                ;;
+            --server*)
+                server="${arg##*=}"
+                ;;
+            -*)
+                error ${USAGE} "unknown argument '${arg}'"
+                return 1
+                ;;
+            *)
+                args+=("${arg}")
+                ;;
+        esac
+    done
+    set -- "${args[@]}"
+
+    [[ ${#} != 3 ]] && error ${USAGE} "not enough arguments" && return 1
+
+    local account="${1}"
+    local email="${2}"
+    local pass_name="${3}"
+
+    [[ -z "${server}" ]] && server="imap.${email#*@}"
+
+    local config_dir="${CONFIGS_DIR}/${account}"
+    mkdir -p "${config_dir}"
+
+    local cache_dir="${MAILDB_DIR}/${account}"
+    mkdir -p "${cache_dir}"
+
+    _pass_insert "${account}" "${pass_name}"
+
+    # Get IMAP folders listing from server
+    _mbsync_config "${account}" "${full_name}" "${email}" "${server}"
+
+    local imap_folders=()
+    readarray -t imap_folders < <(mbsync --config "${config_dir}/${MBSYNC_CFG}" -al)
+    if [[ ${#imap_folders[@]} == 0 ]]; then
+        remove "${account}"
+        error "invalid IMAP credentials"
+        return 1
+    fi
+
+    _mbsync_config "${account}" "${full_name}" "${email}" "${server}" "${imap_folders[@]}"
+    _notify_config "${account}" "${email}" "${server}" "${port}" "${imap_folders[@]}"
+    _notmuch_config "${account}" "${full_name}" "${email}"
+
+    sync "${account}"
+    index "${account}"
+    [[ "${enable_poll}" ]] && enable "${account}"
+}
+
+function disable_help () {
+    cat << EOF
+disable ['account1' ... 'accountN']
+
+Stop new mail polling using IMAP notifier daemon.
+Will be applied to all or specified accounts.
+
+EOF
+}
+
+function disable () {
+    local accounts=()
+
+    if [[ ${#} == 0 ]]; then
+        accounts=($(list))
+    else
+        accounts=("${@}")
+    fi
+
+    local account
+    for account in "${accounts[@]}"; do
+        if ! account_exists "${account}" ; then
+            error "invalid '${account}', skipping"
+            continue
+        fi
+        ${SYSTEMD_BIN} ${SYSTEMD_STOP} "${SYSTEMD_UNIT}@${account}"
+    done
+}
+
+function enable_help () {
+    cat << EOF
+enable ['account1' ... 'accountN']
+
+Start new mail polling using IMAP notifier daemon.
+Will be applied to all or specified accounts.
+
+EOF
+}
+
+function enable () {
+    local accounts=()
+
+    if [[ ${#} == 0 ]]; then
+        accounts=($(list))
+    else
+        accounts=("${@}")
+    fi
+
+    local account
+    for account in "${accounts[@]}"; do
+        if ! account_exists "${account}" ; then
+            error "invalid '${account}', skipping"
+            continue
+        fi
+        ${SYSTEMD_BIN} ${SYSTEMD_START} "${SYSTEMD_UNIT}@${account}"
+    done
+}
+
+function get_help () {
+    cat <<EOF
+get 'account' email|maildir|name|pass
+
+Will return for 'account':
+    email     - user's email address,
+    maildir   - mail database path,
+    name      - user's full name,
+    pass      - application password.
+
+EOF
+}
+
+function get () {
+    [[ ${#} == 0 || ${#} > 2 ]] && error ${USAGE} "invalid arguments" && return 1
+
+    local account="${1}"
+
+    if ! account_exists "${account}" ; then
+        error "account '${account}' does not exists"
+        return 1
+    fi
+
+    local action="${2}"
+    local config="${CONFIGS_DIR}/${account}/${NOTMUCH_CFG}"
+
+    case "${action}" in
+        email)
+            ${NOTMUCH_BIN} --config="${config}" config get user.primary_email
+            ;;
+        maildir)
+            echo "${MAILDB_DIR}/${account}"
+            ;;
+        name)
+            ${NOTMUCH_BIN} --config="${config}" config get user.name
+            ;;
+        pass)
+            _pass_get "${account}"
+            ;;
+        *)
+            error ${USAGE} "unknow action '${action}' requested"
+            return 1
+            ;;
+    esac
+}
+
+function list () {
+    _pass_list
+}
+
+function main_help () {
+    cat << EOF
+'command'
+
+Supported commands:
+    disable   - stop account syncronization using IMAP IDLE,
+    enable    - start account syncronization mail using IMAP IDLE,
+    get       - get account information,
+    help      - internal commands help,
+    index     - index mailbox with 'notmuch'
+    list      - list configured accounts,
+    remove    - remove account,
+    setup     - setyp new mail account,
+    status    - show account status,
+    sync      - sync account with remote server.
+
+Try '${THIS} help command' to see 'command' help.
+
+EOF
+}
+
+function help () {
+    local func="${1:-main}_help"
+
+    if [[ $(type -t "${func}") == "function" ]]; then
+        echo -n "usage: " && ${func}
+    else
+        error_exit "no help available for '${1}'"
+    fi
+}
+
+#===============================================================================
+# Main function
+#===============================================================================
+#
+if [[ ${#} == 0 ]]; then
+    error_exit ${USAGE} "command not specified"
+fi
+
+command="${1}"; shift
+
+if [[ ! "${command}" =~ (dis|en)able|get|help|index|list|remove|setup|status|sync ]]; then
+    error_exit ${USAGE} "unknown command '${command}'"
+fi
+
+if [[ "$(type -t ${command})" != "function" ]]; then
+    error_exit "'${command}' not implemented"
+fi
+
+${command} "${@}"
