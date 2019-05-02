@@ -292,7 +292,8 @@ EOF
 }
 
 function index () {
-    ${NOTMUCH_BIN} new "${NOTMUCH_ARG}" 2>&1 | tee "${LOGS_DIR}/${NOTMUCH_CFG%.conf}.log"
+    local log="${LOGS_DIR}/${NOTMUCH_CFG%.conf}.log"
+    ${NOTMUCH_BIN} new "${NOTMUCH_ARG}" 2> >(tee -a "${log}")
 }
 
 function sync_help () {
@@ -330,7 +331,8 @@ function sync () {
         fi
         channel="${channel:+${account}-${channel}}"
         local config="${CONFIGS_DIR}/${account}/${MBSYNC_CFG}"
-        ${MBSYNC_BIN} --config "${config}" ${MBSYNC_ARG} "${channel:---all}" 2>&1 | tee "${LOGS_DIR}/${account}/${MBSYNC_CFG%.conf}.log"
+        local log="${LOGS_DIR}/${account}/${MBSYNC_CFG%.conf}.log"
+        ${MBSYNC_BIN} --config "${config}" ${MBSYNC_ARG} "${channel:---all}" 2> >(tee -a "${log}")
     done
 }
 
