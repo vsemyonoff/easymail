@@ -340,41 +340,40 @@ EOF
 }
 
 function sync () {
-    local accounts=()
-    local channel="--all"
     local mode=""
 
-    if [[ ${#} == 0 ]]; then
-        accounts=($(list))
-    else
+    if [[ ${#} > 0 ]]; then
         if [[ "${1}" == "-"* ]]; then
             # Mode specified
             case "${1}" in
                 --pull)
-                    mode="--pull"; shift
+                    mode="--pull"
                     ;;
                 --push)
-                    mode="--push"; shift
+                    mode="--push"
                     ;;
                 *)
                     error ${USAGE} "unknown option '${1}'"
                     return 1
                     ;;
             esac
-        fi
-
-        # Account/channel
-        if [[ ${#} > 0 ]]; then
-            # Account specified
-            accounts+=("${1}"); shift
-
-            # Channel specified
-            if [[ ${#} > 0 ]]; then
-                channel="${*:+$(trim "${*}")}"
-            fi
+            shift
         fi
     fi
 
+    local accounts=()
+    local channel="--all"
+
+    if [[ ${#} > 0 ]]; then
+        # Account specified
+        accounts+=("${1}"); shift
+        # Channel specified
+        if [[ ${#} > 0 ]]; then
+            channel="${*:+$(trim "${*}")}"
+        fi
+    else
+        accounts=($(list))
+    fi
 
     local account=""
     for account in "${accounts[@]}"; do
