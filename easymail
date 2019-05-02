@@ -38,7 +38,7 @@ PASS_FIELD="app-pass"
 # Data folders
 CONFIGS_DIR="${XDG_CONFIG_HOME}/${PROJECT}"
 MAILDB_DIR="$(${NOTMUCH_BIN} config get database.path)"
-LOGS_DIR="${XDG_HOME}/log/${PROJECT}"
+LOGS_DIR="${XDG_HOME}/var/log/${PROJECT}"
 
 # Primary name/email
 USER_NAME="$(${NOTMUCH_BIN} config get user.name)"
@@ -175,7 +175,7 @@ IMAPStore ${account}-remote
 MaildirStore ${account}-local
     Subfolders Verbatim
     Path ${mail_dir}/
-    Inbox ${mail_dir}/inbox
+    Inbox ${mail_dir}/Inbox
 
 Channel Other
     Master :${account}-remote:
@@ -193,23 +193,29 @@ EOF
 
     # If imap folders are passed we are able to generate full config
     local imap_folders=("${@}")
-
     local trimmed_folders=()
+    local all_folders=()
     local folder=""
     for folder in "${imap_folders[@]}"; do
-        trimmed_folders+=("$(trim "${folder}")")
+        trimmed_folder=$(trim "${folder}")
+        trimmed_folders+=("${trimmed_folder}")
+        all_folders+=("${folder}")
+
+        if [[ "${folder}" !=  "${trimmed_folder}" ]]; then
+            all_folders+=("${trimmed_folder}")
+        fi
     done
     unset folder
 
     cat >> "${config}" << EOF
-    Patterns * $(printf " !\"%s\"" "${imap_folders[@]}")$(printf " !\"%s\"" "${trimmed_folders[@]}")
+    Patterns * $(printf " !\"%s\"" "${all_folders[@]}")
 EOF
 
     local i
     for (( i=0; i<${#trimmed_folders[@]}; i++ )); do
         cat >> "${config}" << EOF
 
-Channel ${account}-${trimmed_folders[${i}]}
+Channel ${trimmed_folders[${i}]}
     Master :${account}-remote:"${imap_folders[${i}]}"
     Slave :${account}-local:"${trimmed_folders[${i}]}"
 EOF
@@ -223,7 +229,7 @@ EOF
 
     for (( i=0; i<${#trimmed_folders[@]}; i++ )); do
         cat >> "${config}" << EOF
-    Channel ${account}-${trimmed_folders[${i}]}
+    Channel ${trimmed_folders[${i}]}
 EOF
     done
 }
@@ -309,7 +315,7 @@ EOF
 
 function sync () {
     local accounts=()
-    local channel=""
+    local channel="--all"
 
     if [[ ${#} == 0 ]]; then
         accounts=($(list))
@@ -329,10 +335,9 @@ function sync () {
             error "account not exists '${account}', skipping..."
             continue
         fi
-        channel="${channel:+${account}-${channel}}"
         local config="${CONFIGS_DIR}/${account}/${MBSYNC_CFG}"
         local log="${LOGS_DIR}/${account}/${MBSYNC_CFG%.conf}.log"
-        ${MBSYNC_BIN} --config "${config}" ${MBSYNC_ARG} "${channel:---all}" 2> >(tee -a "${log}")
+        ${MBSYNC_BIN} --config "${config}" ${MBSYNC_ARG} "${channel}" 2> >(tee -a "${log}")
     done
 }
 
@@ -342,11 +347,12 @@ function trim () {
     # Remove IMAP prefix
     value="${value##*/}"
 
-    # Lowercase
+    # Pretty names
     value="${value,,}"
+    value="${value^}"
 
-    if [[ "${value}" == "sent"* ]]; then
-        # trim 'sent mail' -> 'sent' to unify accounts.
+    if [[ "${value}" == "Sent"* ]]; then
+        # trim 'Sent mail' -> 'Sent' to unify accounts.
         value="${value%% *}"
     else
         # replace spaces with underscores
@@ -491,7 +497,17 @@ function setup () {
     _notmuch_config "${account}" "${full_name}" "${email}"
 
     sync "${account}"
-    #index "${account}"
+
+    # Initiall notmuch tagging
+    local lables=("${MAILDB_DIR}/${account}/"*)
+    # Exclude my own mail
+    notmuch tag -unread -- from:${me}
+    # Tag messages by account and lable name
+    for lable in "${lables[@]}"; do
+        lable_name="${lable##*/}"
+        notmuch tag +${account} +${lable_name} -- folder:${account}/${lable_name}
+    done
+
     [[ "${enable_poll}" ]] && enable "${account}"
 }
 
