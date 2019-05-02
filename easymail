@@ -114,8 +114,8 @@ function _pass_insert () {
     local pass_dst="${pass_dst_dir}/${account}.gpg"
 
     if [[ ! -r "${PASS_DIR}/${pass_src}" ]]; then
-       error "pass file '${pass_src}' does not exists"
-       return 1
+        error "pass file '${pass_src}' does not exists"
+        return 1
     fi
 
     mkdir -p "${pass_dst_dir}"
@@ -290,7 +290,7 @@ function error_exit () {
 #
 function index_help () {
     cat << EOF
-index ['account']
+index [--initial] ['account']
 
 Update Notmuch tags database.
 
@@ -298,8 +298,28 @@ EOF
 }
 
 function index () {
+    [[ ${#} > 2 ]] && error ${USAGE} "too many arguments" && return 1
+
+    local initial=""
+    if [[ "${1}" == "--initial" ]]; then
+        initial="true"; shift
+    fi
+
     local log="${LOGS_DIR}/${NOTMUCH_CFG%.conf}.log"
-    ${NOTMUCH_BIN} new "${NOTMUCH_ARG}" 2> >(tee -a "${log}")
+    ${NOTMUCH_BIN} ${NOTMUCH_ARG:+"${NOTMUCH_ARG}"} new ${initial:+"--full-scan"} 2> >(tee -a "${log}")
+
+    if [[ "${initial}" ]]; then
+        # Initiall Notmuch tagging
+        local folders=("${MAILDB_DIR}"/${1:-*}/*)
+        local folder=""
+        for folder in "${folders[@]}"; do
+            local account="${folder%/*}" # parent folder
+            account="${account##*/}"    # basename
+            local lable="${folder##*/}" # basename
+            notmuch tag +${account} +${lable} -- folder:${account}/${lable}
+        done
+        notmuch tag -new -- '*'
+    fi
 }
 
 function sync_help () {
@@ -497,16 +517,7 @@ function setup () {
     _notmuch_config "${account}" "${full_name}" "${email}"
 
     sync "${account}"
-
-    # Initiall notmuch tagging
-    local lables=("${MAILDB_DIR}/${account}/"*)
-    # Exclude my own mail
-    notmuch tag -unread -- from:${me}
-    # Tag messages by account and lable name
-    for lable in "${lables[@]}"; do
-        lable_name="${lable##*/}"
-        notmuch tag +${account} +${lable_name} -- folder:${account}/${lable_name}
-    done
+    index --initial "${account}"
 
     [[ "${enable_poll}" ]] && enable "${account}"
 }
