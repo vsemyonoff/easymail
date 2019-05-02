@@ -257,7 +257,7 @@ function _notify_config () {
     local imap_folders=("${@}")
 
     local pass_cmd="${THIS} get ${account} pass"
-    local sync_cmd="${THIS} sync ${account} '%s'"
+    local sync_cmd="${THIS} sync --pull ${account} '%s'"
     local index_cmd="${THIS} index ${account}"
 
     cat > "${CONFIGS_DIR}/${account}/${NOTIFY_CFG}" << EOF
@@ -324,11 +324,17 @@ function index () {
 
 function sync_help () {
     cat << EOF
-sync ['account' ['channel']]
+sync [--pull|--push] ['account' ['channel']]
 
 Syncronize 'account' with IMAP server.
 If 'channel' specified then syncronize only it.
-If not 'account' specified - sync all accounts.
+Sync all if no 'account' specified.
+
+Mode specifier:
+    --pull - only pull changes from server,
+    --push - only push local changes to server.
+
+Default is sycn both.
 
 EOF
 }
@@ -336,18 +342,39 @@ EOF
 function sync () {
     local accounts=()
     local channel="--all"
+    local mode=""
 
     if [[ ${#} == 0 ]]; then
         accounts=($(list))
     else
-        # Account specified
-        accounts+=("${1}"); shift
+        if [[ "${1}" == "-"* ]]; then
+            # Mode specified
+            case "${1}" in
+                --pull)
+                    mode="--pull"; shift
+                    ;;
+                --push)
+                    mode="--push"; shift
+                    ;;
+                *)
+                    error ${USAGE} "unknown option '${1}'"
+                    return 1
+                    ;;
+            esac
+        fi
 
-        # Channel specified
+        # Account/channel
         if [[ ${#} > 0 ]]; then
-            channel="${*:+$(trim "${*}")}"
+            # Account specified
+            accounts+=("${1}"); shift
+
+            # Channel specified
+            if [[ ${#} > 0 ]]; then
+                channel="${*:+$(trim "${*}")}"
+            fi
         fi
     fi
+
 
     local account=""
     for account in "${accounts[@]}"; do
@@ -357,7 +384,7 @@ function sync () {
         fi
         local config="${CONFIGS_DIR}/${account}/${MBSYNC_CFG}"
         local log="${LOGS_DIR}/${account}/${MBSYNC_CFG%.conf}.log"
-        ${MBSYNC_BIN} --config "${config}" ${MBSYNC_ARG} "${channel}" 2> >(tee -a "${log}")
+        ${MBSYNC_BIN} --config "${config}" ${MBSYNC_ARG:+"${MBSYNC_ARG}"} ${mode:+"${mode}"} "${channel}" 2> >(tee -a "${log}")
     done
 }
 
