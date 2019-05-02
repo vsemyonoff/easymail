@@ -37,8 +37,9 @@ PASS_FIELD="app-pass"
 
 # Data folders
 CONFIGS_DIR="${XDG_CONFIG_HOME}/${PROJECT}"
-MAILDB_DIR="$(${NOTMUCH_BIN} config get database.path)"
 LOGS_DIR="${XDG_HOME}/var/log/${PROJECT}"
+MAILDB_DIR="$(${NOTMUCH_BIN} config get database.path)"
+SCRIPTS_DIR="${XDG_DATA_HOME}/${PROJECT}"
 
 # Primary name/email
 USER_NAME="$(${NOTMUCH_BIN} config get user.name)"
@@ -302,24 +303,11 @@ function index () {
 
     local initial=""
     if [[ "${1}" == "--initial" ]]; then
-        initial="true"; shift
+        initial="--full-scan"; shift
     fi
 
     local log="${LOGS_DIR}/${NOTMUCH_CFG%.conf}.log"
-    ${NOTMUCH_BIN} ${NOTMUCH_ARG:+"${NOTMUCH_ARG}"} new ${initial:+"--full-scan"} 2> >(tee -a "${log}")
-
-    if [[ "${initial}" ]]; then
-        # Initiall Notmuch tagging
-        local folders=("${MAILDB_DIR}"/${1:-*}/*)
-        local folder=""
-        for folder in "${folders[@]}"; do
-            local account="${folder%/*}" # parent folder
-            account="${account##*/}"    # basename
-            local lable="${folder##*/}" # basename
-            notmuch tag +${account} +${lable} -- folder:${account}/${lable}
-        done
-        notmuch tag -new -- '*'
-    fi
+    ${NOTMUCH_BIN} ${NOTMUCH_ARG:+"${NOTMUCH_ARG}"} new ${initial:+${initial}} 2> >(tee -a "${log}")
 }
 
 function sync_help () {
