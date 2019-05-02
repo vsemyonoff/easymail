@@ -308,15 +308,18 @@ EOF
 
 function sync () {
     local accounts=()
-    local channel="--all" # man mbsync
+    local channel=""
 
     if [[ ${#} == 0 ]]; then
         accounts=($(list))
-    elif [[ ${#} == 1 ]]; then
-        accounts+=("${1}"); shift
     else
-        channel="${*:+$(trim "${*}")}" # normalize channel name
-        channel="${account}-${channel}"
+        # Account specified
+        accounts+=("${1}"); shift
+
+        # Channel specified
+        if [[ ${#} > 0 ]]; then
+            channel="${*:+$(trim "${*}")}"
+        fi
     fi
 
     local account=""
@@ -325,8 +328,9 @@ function sync () {
             error "account not exists '${account}', skipping..."
             continue
         fi
+        channel="${channel:+${account}-${channel}}"
         local config="${CONFIGS_DIR}/${account}/${MBSYNC_CFG}"
-        ${MBSYNC_BIN} --config "${config}" ${MBSYNC_ARG} "${channel}" 2>&1 | tee "${LOGS_DIR}/${account}/${MBSYNC_CFG%.conf}.log"
+        ${MBSYNC_BIN} --config "${config}" ${MBSYNC_ARG} "${channel:---all}" 2>&1 | tee "${LOGS_DIR}/${account}/${MBSYNC_CFG%.conf}.log"
     done
 }
 
