@@ -37,7 +37,7 @@ PASS_FIELD="app-pass"
 
 # Data folders
 CONFIGS_DIR="${XDG_CONFIG_HOME}/${PROJECT}"
-LOGS_DIR="${XDG_HOME}/var/log/${PROJECT}"
+LOGS_DIR="${XDG_LOG_HOME:-${XDG_HOME:-${HOME}/.local}/var/log}/${PROJECT}"
 MAILDB_DIR="$(${NOTMUCH_BIN} config get database.path)"
 SCRIPTS_DIR="${XDG_DATA_HOME}/${PROJECT}"
 
@@ -164,17 +164,18 @@ Expunge Both
 SyncState *
 
 IMAPAccount ${account}
+    CertificateFile /etc/ssl/certs/ca-certificates.crt
     Host ${server}
     User ${email}
     PassCmd "${THIS} get ${account} pass"
     SSLType IMAPS
-    CertificateFile /etc/ssl/certs/ca-certificates.crt
+    Timeout 600
 
 IMAPStore ${account}-remote
     Account ${account}
 
 MaildirStore ${account}-local
-    Subfolders Verbatim
+    SubFolders Verbatim
     Path ${mail_dir}/
     Inbox ${mail_dir}/Inbox
 
@@ -189,8 +190,8 @@ EOF
         return
     fi
 
-    # Cleanup after discovery mode
-    ${RM_DIR} "${XDG_RUNTIME_DIR}/${THIS}/${account}"
+    # Cleanup quietly after discovery mode
+    ${RM_DIR} "${XDG_RUNTIME_DIR}/${THIS}/${account}" >/dev/null 2>&1
 
     # If imap folders are passed we are able to generate full config
     local imap_folders=("${@}")
@@ -258,7 +259,7 @@ function _notify_config () {
     local imap_folders=("${@}")
 
     local pass_cmd="${THIS} get ${account} pass"
-    local sync_cmd="${THIS} sync --pull ${account} '%s'"
+    local sync_cmd="${THIS} sync ${account} '%s'"
     local index_cmd="${THIS} index ${account}"
 
     cat > "${CONFIGS_DIR}/${account}/${NOTIFY_CFG}" << EOF
@@ -293,6 +294,8 @@ function index_help () {
     cat << EOF
 index [--initial] ['account']
 
+    --initial - turn off 'notmuch new' scan optimization.
+
 Update Notmuch tags database.
 
 EOF
@@ -307,7 +310,7 @@ function index () {
     fi
 
     local log="${LOGS_DIR}/${NOTMUCH_CFG%.conf}.log"
-    ${NOTMUCH_BIN} ${NOTMUCH_ARG:+"${NOTMUCH_ARG}"} new ${initial:+${initial}} 2> >(tee -a "${log}")
+    ${NOTMUCH_BIN} new ${NOTMUCH_ARG:+"${NOTMUCH_ARG}"} ${initial:+${initial}} 2>&1 | tee -a "${log}"
 }
 
 function sync_help () {
@@ -374,7 +377,7 @@ function sync () {
         fi
         local config="${CONFIGS_DIR}/${account}/${MBSYNC_CFG}"
         local log="${LOGS_DIR}/${account}/${MBSYNC_CFG%.conf}.log"
-        ${MBSYNC_BIN} --config "${config}" ${MBSYNC_ARG:+"${MBSYNC_ARG}"} ${mode:+"${mode}"} ${channels:-"--all"} 2> >(tee -a "${log}")
+        ${MBSYNC_BIN} --config "${config}" ${MBSYNC_ARG:+"${MBSYNC_ARG}"} ${mode:+"${mode}"} ${channels:-"--all"} 2>&1 | tee -a "${log}"
     done
 }
 
@@ -533,10 +536,10 @@ function setup () {
     _notify_config "${account}" "${email}" "${server}" "${port}" "${imap_folders[@]}"
     _notmuch_config "${account}" "${full_name}" "${email}"
 
-    sync "${account}"
+    sync "${account}" Inbox Sent Spam Trash
     index --initial "${account}"
 
-    [[ "${enable_poll}" ]] && enable "${account}"
+    [[ "${enable_poll}" ]] && enable "${account}" || return 0
 }
 
 function disable_help () {
@@ -653,7 +656,7 @@ function main_help () {
 
 Supported commands:
     disable   - stop account syncronization using IMAP IDLE,
-    enable    - start account syncronization mail using IMAP IDLE,
+    enable    - start account syncronization using IMAP IDLE,
     get       - get account information,
     help      - internal commands help,
     index     - index mailbox with 'notmuch'
