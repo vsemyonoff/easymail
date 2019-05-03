@@ -259,7 +259,7 @@ function _notify_config () {
     local imap_folders=("${@}")
 
     local pass_cmd="${THIS} get ${account} pass"
-    local sync_cmd="${THIS} sync ${account} '%s'"
+    local sync_cmd="${THIS} sync --pull ${account} '%s'"
     local index_cmd="${THIS} index ${account}"
 
     cat > "${CONFIGS_DIR}/${account}/${NOTIFY_CFG}" << EOF
