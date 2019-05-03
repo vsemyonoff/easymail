@@ -312,11 +312,11 @@ function index () {
 
 function sync_help () {
     cat << EOF
-sync [--pull|--push] ['account' ['channel']]
+sync [--pull|--push] ['account' ['channel1' ... 'channelN']]
 
 Syncronize 'account' with IMAP server.
-If 'channel' specified then syncronize only it.
-Sync all if no 'account' specified.
+Sync no account name specified then sync all accounts.
+If one or more channel names specified then syncronize only them.
 
 Mode specifier:
     --pull - only pull changes from server,
@@ -350,15 +350,18 @@ function sync () {
     fi
 
     local accounts=()
-    local channel="--all"
+    local channels=""
 
     if [[ ${#} > 0 ]]; then
         # Account specified
         accounts+=("${1}"); shift
-        # Channel specified
-        if [[ ${#} > 0 ]]; then
-            channel="${*:+$(trim "${*}")}"
-        fi
+
+        # Process the rest as channel names
+        local arg
+        for arg in "${@}"; do
+            channels="${channels} $(trim "${arg}")"
+        done
+        unset arg
     else
         accounts=($(list))
     fi
@@ -371,7 +374,7 @@ function sync () {
         fi
         local config="${CONFIGS_DIR}/${account}/${MBSYNC_CFG}"
         local log="${LOGS_DIR}/${account}/${MBSYNC_CFG%.conf}.log"
-        ${MBSYNC_BIN} --config "${config}" ${MBSYNC_ARG:+"${MBSYNC_ARG}"} ${mode:+"${mode}"} "${channel}" 2> >(tee -a "${log}")
+        ${MBSYNC_BIN} --config "${config}" ${MBSYNC_ARG:+"${MBSYNC_ARG}"} ${mode:+"${mode}"} ${channels:-"--all"} 2> >(tee -a "${log}")
     done
 }
 
