@@ -27,12 +27,10 @@ if [[ ${deleted_count} > 0 ]]; then
     unset account
 
     # Delete messages tagged as 'deleted'
-    echo rm "${files[@]}"
+    rm "${files[@]}"
 
     # Sync only affected accounts changes to server
     for (( i=0; i<${#accounts[@]}; i++ )); do
-        for channel in ${channels[${i}]}; do
-            easymail sync --push ${accounts[${i}]} ${channel}
-        done
+        easymail sync --push ${accounts[${i}]} ${channels[${i}]}
     done
 fi
