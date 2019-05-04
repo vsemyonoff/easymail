@@ -12,7 +12,6 @@ readed=("readed" "-readed")
 tags=(readed trashed)
 
 # Trashed messages handler
-trash_added=""
 function trashed_handler () {
     [[ ${#} != 3 ]] && echo "invalid handler call" && return 1
 
@@ -26,17 +25,14 @@ function trashed_handler () {
     fi
 
     # Add 'Trash' to affected channels (only once)
-    if [[ -z "${trash_added=}" ]]; then
-        for (( i=0; i<${#accounts[@]}; i++ )); do
-            if [[ "${accounts[${i}]}" == "${a}" ]]; then
-                if [[ ! "${channels[${i}]}" =~ (.*)?Trash(.*)? ]]; then
-                    channels[${i}]="${channels[${i}]} Trash"
-                fi
-                trash_added="true"
-                break
+    for (( i=0; i<${#accounts[@]}; i++ )); do
+        if [[ "${accounts[${i}]}" == "${a}" ]]; then
+            if [[ ! "${channels[${i}]}" =~ (.*)?Trash(.*)? ]]; then
+                channels[${i}]="${channels[${i}]} Trash"
             fi
-        done
-    fi
+            break
+        fi
+    done
 
     # Remove original file
     rm -fv "${f}"
