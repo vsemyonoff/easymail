@@ -27,6 +27,12 @@
         )
       )
 
+(defun vs|notmuch/async-push-changes ()
+  "Call `notmuch-poll' async version to give a chance to `pre-new' hook."
+  (make-thread (lambda () (start-process "easymail" nil "notmuch" "new")))
+  )
+(advice-add 'notmuch-bury-or-kill-this-buffer :after #'vs|notmuch/async-push-changes)
+
 ;; Tree mode
 (defun vs|notmuch|tree-toggle-trashed ()
   "Toggle 'trashed' tag for message."
