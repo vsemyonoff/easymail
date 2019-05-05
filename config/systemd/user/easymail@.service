@@ -3,7 +3,6 @@ Description=IMAP notifier using IDLE, golang version.
 After=network.target
 
 [Service]
-EnvironmentFile=%h/.profile.d/env.d/user.env
 ExecStart=goimapnotify -conf ${XDG_CONFIG_HOME}/easymail/%I/notify.conf
 Restart=always
 RestartSec=30

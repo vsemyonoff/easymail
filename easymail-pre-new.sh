@@ -5,11 +5,25 @@
 #
 # Pairs:
 #     'tag' name -- 'notmuch tag' args to apply after 'tag' processing
-trashed=("trashed" "--remove-all +new")
+deleted=("deleted" "")
+draft=("newdraft" "-newdraft +draft +new")
 readed=("readed" "-readed")
+sent=("newsent" "-newsent +new")
+trashed=("trashed" "-trashed -unread")
+unreaded=("unreaded" "-unreaded")
 
 # Tags combined
-tags=(readed trashed)
+tags=(deleted draft readed sent trashed unreaded)
+
+# Deleted messages handler
+function deleted_handler () {
+    [[ ${#} != 3 ]] && echo "invalid handler call" && return 1
+
+    local f="${1}" # file name
+
+    # Just remove
+    rm -fv "${f}"
+}
 
 # Trashed messages handler
 function trashed_handler () {
@@ -25,10 +39,10 @@ function trashed_handler () {
     fi
 
     # Add 'Trash' to affected channels (only once)
-    for (( i=0; i<${#accounts[@]}; i++ )); do
-        if [[ "${accounts[${i}]}" == "${a}" ]]; then
-            if [[ ! "${channels[${i}]}" =~ (.*)?Trash(.*)? ]]; then
-                channels[${i}]="${channels[${i}]} Trash"
+    for (( i=0; i<${#mod_accounts[@]}; i++ )); do
+        if [[ "${mod_accounts[${i}]}" == "${a}" ]]; then
+            if [[ ! "${mod_channels[${i}]}" =~ (.*)?Trash(.*)? ]]; then
+                mod_channels[${i}]="${mod_channels[${i}]} Trash"
             fi
             break
         fi
@@ -42,45 +56,53 @@ function trashed_handler () {
 # Main
 ################################################################################
 #
+PROJECT="easymail"
+
+# Override defaults from config if it exists
+USER_CONFIG="${XDG_CONFIG_HOME}/${PROJECT}.conf"
+[[ -r "${USER_CONFIG}" ]] && source "${USER_CONFIG}"
+
+# Data folders
+LOGS_DIR="${XDG_LOG_HOME:-${XDG_HOME:-${HOME}/.local}/var/log}/${PROJECT}"
+MAILDB_DIR="$(notmuch config get database.path)"
+
 # Redirect all output to log file
-log_dir="${XDG_LOG_HOME:-${XDG_HOME:-${HOME}/.local}/var/log}/easymail"
-log="${log_dir}/pre-new.log"
-exec &> >(tee "${log}")
+log="${LOGS_DIR}/index.log"
+exec &> >(tee -a "${log}")
 
-maildb_dir="$(notmuch config get database.path)"
-
-# Changed accounts list
-accounts=()
+# Changed accounts/channels list
+mod_accounts=()
+mod_channels=()
 
 for tag in "${tags[@]}"; do
     # ??? , but it works :)
-    tag_name=$(eval echo \${${tag}[0]})
+    tag_name=$(eval echo \${${tag}[0]}); [[ -z "${tag_name}" ]] && continue
     tag_args=$(eval echo \${${tag}[1]})
 
-    files=($(notmuch search --output=files --format=text -- "tag:${tag_name}"))
+    mod_files=($(notmuch search --output=files --format=text -- "tag:${tag_name}"))
 
     handler="${tag_name}_handler"
     if [[ ! $(type -t "${handler}") == "function" ]]; then
         unset handler
     fi
 
-    if [[ ${#files[@]} > 0 ]]; then
+    if [[ ${#mod_files[@]} > 0 ]]; then
         # Parse affected accounts/channels and move to Trash
-        for file in "${files[@]}"; do
+        for file in "${mod_files[@]}"; do
             # Get account from file name
-            account="${file#${maildb_dir}/}"
+            account="${file#${MAILDB_DIR}/}"
             account="${account%%/*}"
-            if [[ ! "${accounts[*]}" =~ (.*)?${account}(.*)? ]]; then
-                accounts+=("${account}")
+            if [[ ! "${mod_accounts[*]}" =~ (.*)?${account}(.*)? ]]; then
+                mod_accounts+=("${account}")
             fi
 
             # Get channel from file name && assign channel list to account
-            channel="${file#${maildb_dir}/${account}/}"
+            channel="${file#${MAILDB_DIR}/${account}/}"
             channel="${channel%%/*}"
-            for (( i=0; i<${#accounts[@]}; i++ )); do
-                if [[ "${accounts[${i}]}" == "${account}" ]]; then
-                    if [[ ! "${channels[${i}]}" =~ (.*)?${channel}(.*)? ]]; then
-                        channels[${i}]="${channels[${i}]} ${channel}"
+            for (( i=0; i<${#mod_accounts[@]}; i++ )); do
+                if [[ "${mod_accounts[${i}]}" == "${account}" ]]; then
+                    if [[ ! "${mod_channels[${i}]}" =~ (.*)?${channel}(.*)? ]]; then
+                        mod_channels[${i}]="${mod_channels[${i}]} ${channel}"
                     fi
                     break # we've found account index
                 fi
@@ -90,12 +112,11 @@ for tag in "${tags[@]}"; do
             [[ -v handler ]] && ${handler} "${file}" "${account}" "${channel}"
         done
 
-        notmuch tag ${tag_args} -- "tag:${tag_name}"
+        ${tag_args:+notmuch tag ${tag_args} -- "tag:${tag_name}"}
     fi
 done
 
-# Sync changed accounts/channels
-for (( i=0; i<${#accounts[@]}; i++ )); do
-    echo easymail sync --push ${accounts[${i}]} ${channels[${i}]}
-    easymail sync --push ${accounts[${i}]} ${channels[${i}]}
+# Sync changed accounts/channels in background
+for (( i=0; i<${#mod_accounts[@]}; i++ )); do
+    easymail sync --push ${mod_accounts[${i}]} ${mod_channels[${i}]}
 done

@@ -1,8 +1,29 @@
 #!/usr/bin/env bash
+################################################################################
+# Config
+################################################################################
+#
 
+################################################################################
+# Main
+################################################################################
+#
+# PROJECT="easymail"
+
+# # Override defaults from config if it exists
+# USER_CONFIG="${XDG_CONFIG_HOME}/${PROJECT}.conf"
+# [[ -r "${USER_CONFIG}" ]] && source "${USER_CONFIG}"
+
+# # Data folders
+# LOGS_DIR="${XDG_LOG_HOME:-${XDG_HOME:-${HOME}/.local}/var/log}/${PROJECT}"
+# MAILDB_DIR="$(notmuch config get database.path)"
+
+# # Redirect all output to log file
+# log="${LOGS_DIR}/index.log"
+# exec &> >(tee -a "${log}")
+
+# Tag all 'new' messages with 'account' and 'folder' names
 shopt -s nullglob; accounts=($(easymail list))
-
-# Tag all 'new' with 'account' and 'folder' names
 for account in "${accounts[@]}"; do
     folders=("$(easymail get ${account} maildir)"/*)
     folder=""

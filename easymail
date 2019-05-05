@@ -4,7 +4,6 @@
 # Config part
 #===============================================================================
 #
-PROJECT="easymail"
 
 # Notmuch
 NOTMUCH_BIN="notmuch"
@@ -18,7 +17,7 @@ MBSYNC_ARG="--verbose"
 
 # Systemd
 SYSTEMD_BIN="systemctl"
-SYSTEMD_UNIT="${PROJECT}"
+SYSTEMD_UNIT="easymail"
 SYSTEMD_START="--user enable --now"
 SYSTEMD_STOP="--user disable --now"
 
@@ -29,11 +28,26 @@ NOTIFY_CFG="notify.conf"
 # ZX2C4 Pass
 PASS_BIN="pass"
 PASS_DIR="${PASSWORD_STORE_DIR:-${HOME}/.password-store}"
-PASS_GRP=".${PROJECT}"
+PASS_GRP=".easymail"
 PASS_FIELD="app-pass"
 
+#===============================================================================
+# Code part
+#===============================================================================
+#
+
+# Override defaults from config if it exists
+USER_CONFIG="${XDG_CONFIG_HOME}/easymail.conf"
+[[ -r "${USER_CONFIG}" ]] && source "${USER_CONFIG}"
+
 ## Check dependencies
-#which ${NOTMUCH_BIN} ${MBSYNC_BIN} ${NOTIFY_BIN} ${PASS_BIN} || exit 1
+#if ! which ${NOTMUCH_BIN} ${MBSYNC_BIN} ${NOTIFY_BIN} ${PASS_BIN} 2>/dev/null; then
+#   echo "error: can't find required applications"
+#   exit 1
+#fi
+
+# Project name
+PROJECT="easymail"
 
 # Data folders
 CONFIGS_DIR="${XDG_CONFIG_HOME}/${PROJECT}"
@@ -50,15 +64,8 @@ USER_EMAIL="$(${NOTMUCH_BIN} config get user.primary_email)"
 RM_DIR="${PRETEND} rm -frv"
 RM="${PRETEND} rm -fv"
 
-#===============================================================================
-# Code part
-#===============================================================================
-#
 # This script
 THIS="$(basename ${0})"
-
-# Override default with settings
-[[ -r "${XDG_CONFIG_HOME}/${THIS}.conf" ]] && source "${XDF_CONFIG_HOME}/${THIS}.conf"
 
 # Usage message and indicator
 USAGE="usage:"
