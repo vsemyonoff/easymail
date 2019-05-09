@@ -324,15 +324,15 @@ function sync_help () {
     cat << EOF
 sync [--pull|--push] ['account' ['channel1' ... 'channelN']]
 
-Syncronize 'account' with IMAP server.
+Synchronize 'account' with IMAP server.
 Sync no account name specified then sync all accounts.
-If one or more channel names specified then syncronize only them.
+If one or more channel names specified then synchronize only them.
 
 Mode specifier:
     --pull - only pull changes from server,
     --push - only push local changes to server.
 
-Default is sycn both.
+Default is sync both.
 
 EOF
 }
@@ -662,14 +662,14 @@ function main_help () {
 'command'
 
 Supported commands:
-    disable   - stop account syncronization using IMAP IDLE,
-    enable    - start account syncronization using IMAP IDLE,
+    disable   - stop account synchronization using IMAP IDLE,
+    enable    - start account synchronization using IMAP IDLE,
     get       - get account information,
     help      - internal commands help,
     index     - index mailbox with 'notmuch'
     list      - list configured accounts,
     remove    - remove account,
-    setup     - setyp new mail account,
+    setup     - setup new mail account,
     status    - show account status,
     sync      - sync account with remote server.
 
