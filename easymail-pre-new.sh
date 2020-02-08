@@ -6,11 +6,11 @@
 # Pairs:
 #     'tag' name -- 'notmuch tag' args to apply after 'tag' processing
 deleted=("deleted" "")
-draft=("newdraft" "-newdraft +draft +new")
-readed=("readed" "-readed")
-sent=("newsent" "-newsent +new")
-trashed=("trashed" "-trashed -unread")
-unreaded=("unreaded" "-unreaded")
+draft=("newdraft" "--remove-all +draft +new")
+readed=("readed" "-readed -unread")
+sent=("newsent" "--remove-all +new")
+trashed=("trashed" "--remove-all +new")
+unreaded=("unreaded" "-unreaded +unread")
 
 # Tags combined
 tags=(deleted draft readed sent trashed unreaded)
